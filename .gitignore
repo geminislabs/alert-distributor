@@ -1,0 +1,12 @@
+/target
+
+# Environment files
+.env
+.env.local
+
+# macOS
+.DS_Store
+
+# IDE/Editor
+.idea/
+.vscode/
