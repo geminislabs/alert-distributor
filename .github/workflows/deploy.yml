@@ -1,35 +1,148 @@
-name: Rust CI
+name: Deploy To EC2
 
 on:
   push:
-    branches:
-      - "**"
-  pull_request:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: deploy-alert-distributor
+  cancel-in-progress: false
 
 jobs:
-  quality-and-build:
+  deploy:
     runs-on: ubuntu-latest
+    environment: production
+    env:
+      APP_NAME: alert-distributor
+      APP_DIR: /home/${{ secrets.EC2_USERNAME }}/alert-distributor
+      RELEASE_TAG: ${{ github.ref_name }}
+
+      # EC2 access credentials (required)
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT }}
+      EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+      EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+
+      # Non-sensitive environment values come from GitHub Variables
+      DB_HOST: ${{ vars.DB_HOST }}
+      DB_USER: ${{ vars.DB_USER }}
+      DB_PORT: ${{ vars.DB_PORT }}
+      DB_NAME: ${{ vars.DB_NAME }}
+      KAFKA_BROKERS: ${{ vars.KAFKA_BROKERS }}
+      KAFKA_TOPIC: ${{ vars.KAFKA_TOPIC }}
+      KAFKA_GROUP_ID: ${{ vars.KAFKA_GROUP_ID }}
+      RUST_LOG: ${{ vars.RUST_LOG }}
+      KAFKA_SASL_MECHANISM: ${{ vars.KAFKA_SASL_MECHANISM }}
+      KAFKA_USERNAME: ${{ vars.KAFKA_USERNAME }}
+      KAFKA_SECURITY_PROTOCOL: ${{ vars.KAFKA_SECURITY_PROTOCOL }}
+      WS_BIND_ADDR: ${{ vars.WS_BIND_ADDR }}
+      WS_CHANNEL_CAPACITY: ${{ vars.WS_CHANNEL_CAPACITY }}
+      WS_HEARTBEAT_INTERVAL_SECS: ${{ vars.WS_HEARTBEAT_INTERVAL_SECS }}
+      WS_HEARTBEAT_TIMEOUT_SECS: ${{ vars.WS_HEARTBEAT_TIMEOUT_SECS }}
+      JWT_PUBLIC_KEY_PEM: ${{ vars.JWT_PUBLIC_KEY_PEM }}
+
+      # Passwords come from GitHub Secrets
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      KAFKA_PASSWORD: ${{ secrets.KAFKA_PASSWORD }}
 
     steps:
+      - name: Validate semver tag format (vX.Y.Z)
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '${GITHUB_REF_NAME}' no cumple formato vX.Y.Z"
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install native dependencies for build checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            pkg-config \
+            libssl-dev \
+            libsasl2-dev \
+            libcurl4-openssl-dev \
+            zlib1g-dev \
+            librdkafka-dev
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
 
-      - name: cargo fmt --check
-        run: cargo fmt --check
-
       - name: cargo clippy
         run: cargo clippy -- -D warnings
 
-      - name: cargo test
-        run: cargo test
+      - name: Copy sources to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ env.EC2_HOST }}
+          username: ${{ env.EC2_USERNAME }}
+          key: ${{ env.EC2_SSH_KEY }}
+          port: ${{ env.EC2_SSH_PORT }}
+          source: "Cargo.toml,Cargo.lock,src,Dockerfile,.dockerignore"
+          target: ${{ env.APP_DIR }}
+          overwrite: true
 
-      - name: cargo build
-        run: cargo build
+      - name: Build and run container in EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.EC2_HOST }}
+          username: ${{ env.EC2_USERNAME }}
+          key: ${{ env.EC2_SSH_KEY }}
+          port: ${{ env.EC2_SSH_PORT }}
+          envs: APP_NAME,APP_DIR,RELEASE_TAG,DB_HOST,DB_USER,DB_PASSWORD,DB_PORT,DB_NAME,KAFKA_BROKERS,KAFKA_TOPIC,KAFKA_GROUP_ID,RUST_LOG,KAFKA_SASL_MECHANISM,KAFKA_USERNAME,KAFKA_PASSWORD,KAFKA_SECURITY_PROTOCOL,WS_BIND_ADDR,WS_CHANNEL_CAPACITY,WS_HEARTBEAT_INTERVAL_SECS,WS_HEARTBEAT_TIMEOUT_SECS,JWT_PUBLIC_KEY_PEM
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            mkdir -p "${APP_DIR}"
+            cd "${APP_DIR}"
+
+            # Docker --env-file no elimina comillas; escribir valores sin ellas.
+            # JWT_PUBLIC_KEY_PEM: convertir saltos de línea reales a \n literal
+            # (config.rs ya aplica .replace("\\n", "\n")).
+            {
+              printf 'DB_HOST=%s\n'                    "${DB_HOST}"
+              printf 'DB_USER=%s\n'                    "${DB_USER}"
+              printf 'DB_PASSWORD=%s\n'                "${DB_PASSWORD}"
+              printf 'DB_PORT=%s\n'                    "${DB_PORT}"
+              printf 'DB_NAME=%s\n'                    "${DB_NAME}"
+              printf 'KAFKA_BROKERS=%s\n'              "${KAFKA_BROKERS}"
+              printf 'KAFKA_TOPIC=%s\n'                "${KAFKA_TOPIC}"
+              printf 'KAFKA_GROUP_ID=%s\n'             "${KAFKA_GROUP_ID}"
+              printf 'RUST_LOG=%s\n'                   "${RUST_LOG}"
+              printf 'KAFKA_SASL_MECHANISM=%s\n'       "${KAFKA_SASL_MECHANISM}"
+              printf 'KAFKA_USERNAME=%s\n'             "${KAFKA_USERNAME}"
+              printf 'KAFKA_PASSWORD=%s\n'             "${KAFKA_PASSWORD}"
+              printf 'KAFKA_SECURITY_PROTOCOL=%s\n'    "${KAFKA_SECURITY_PROTOCOL}"
+              printf 'WS_BIND_ADDR=%s\n'               "${WS_BIND_ADDR}"
+              printf 'WS_CHANNEL_CAPACITY=%s\n'        "${WS_CHANNEL_CAPACITY}"
+              printf 'WS_HEARTBEAT_INTERVAL_SECS=%s\n' "${WS_HEARTBEAT_INTERVAL_SECS}"
+              printf 'WS_HEARTBEAT_TIMEOUT_SECS=%s\n'  "${WS_HEARTBEAT_TIMEOUT_SECS}"
+              printf 'JWT_PUBLIC_KEY_PEM=%s\n'         "${JWT_PUBLIC_KEY_PEM//$'\n'/\\n}"
+            } > .env.production
+
+            APP_PORT="${WS_BIND_ADDR##*:}"
+            if ! [[ "${APP_PORT}" =~ ^[0-9]+$ ]]; then
+              echo "WS_BIND_ADDR invalido: ${WS_BIND_ADDR}"
+              exit 1
+            fi
+
+            docker build --pull -t "${APP_NAME}:${RELEASE_TAG}" -t "${APP_NAME}:latest" .
+            docker rm -f "${APP_NAME}" >/dev/null 2>&1 || true
+            docker run -d \
+              --name "${APP_NAME}" \
+              --restart unless-stopped \
+              --network siscom-network \
+              --env-file .env.production \
+              -p "${APP_PORT}:${APP_PORT}" \
+              "${APP_NAME}:${RELEASE_TAG}"
