@@ -2,18 +2,21 @@ use futures::StreamExt;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::{BorrowedMessage, Message};
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::config::AppConfig;
 use crate::errors::AppResult;
 use crate::models::alert_event::AlertEvent;
+use crate::websocket::dispatcher::AlertDispatcher;
 
 pub struct AlertsConsumer {
     consumer: StreamConsumer,
+    dispatcher: Arc<AlertDispatcher>,
 }
 
 impl AlertsConsumer {
-    pub fn new(config: &AppConfig) -> AppResult<Self> {
+    pub fn new(config: &AppConfig, dispatcher: Arc<AlertDispatcher>) -> AppResult<Self> {
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", &config.kafka_brokers)
             .set("group.id", &config.kafka_group_id)
@@ -25,7 +28,10 @@ impl AlertsConsumer {
             .set("sasl.password", &config.kafka_password)
             .create()?;
 
-        Ok(Self { consumer })
+        Ok(Self {
+            consumer,
+            dispatcher,
+        })
     }
 
     pub async fn run(&self, topic: &str) -> AppResult<()> {
@@ -69,6 +75,8 @@ impl AlertsConsumer {
                     offset = message.offset(),
                     "alert_event_ingested"
                 );
+
+                self.dispatcher.dispatch_event(&event).await;
 
                 if let Err(err) = self.consumer.commit_message(&message, CommitMode::Async) {
                     error!(

@@ -7,7 +7,7 @@ use uuid::Uuid;
 pub struct AlertEvent {
     pub id: Uuid,
     pub organization_id: Uuid,
-    pub unit_id: Uuid,
+    pub unit_id: String,
     pub rule_id: Uuid,
     pub source_type: String,
     pub source_id: Uuid,
@@ -49,6 +49,7 @@ mod tests {
             parsed.id.to_string(),
             "11111111-1111-1111-1111-111111111111"
         );
+        assert_eq!(parsed.unit_id, "33333333-3333-3333-3333-333333333333");
         assert_eq!(parsed.alert_type, "Engine OFF");
         assert_eq!(parsed.source_type, "event");
     }
