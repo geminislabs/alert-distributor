@@ -5,8 +5,9 @@ use sqlx::FromRow;
 
 use crate::db::postgres::DbPool;
 use crate::errors::AppResult;
+use crate::sns::models::UserDevice;
 
-use super::cache::{OrganizationId, PermissionCache, UnitId, UserId};
+use super::cache::{DeviceId, OrganizationId, PermissionCache, UnitId, UserDevicesCache, UserId};
 
 type PermissionKey = (OrganizationId, UserId);
 
@@ -15,6 +16,17 @@ struct PermissionRow {
     organization_id: OrganizationId,
     user_id: UserId,
     unit_id: UnitId,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct DeviceRow {
+    organization_id: OrganizationId,
+    user_id: UserId,
+    device_id: DeviceId,
+    device_token: String,
+    platform: String,
+    endpoint_arn: Option<String>,
+    is_active: bool,
 }
 
 pub async fn load_permission_snapshot(pool: &DbPool) -> AppResult<PermissionCache> {
@@ -44,14 +56,43 @@ pub async fn load_permission_snapshot(pool: &DbPool) -> AppResult<PermissionCach
     Ok(cache_from_rows(rows))
 }
 
+pub async fn load_user_devices_snapshot(pool: &DbPool) -> AppResult<UserDevicesCache> {
+    let rows = sqlx::query_as::<_, DeviceRow>(
+        r#"
+        SELECT
+            ou.organization_id,
+            ud.user_id,
+            ud.id AS device_id,
+            ud.device_token,
+            ud.platform,
+            ud.endpoint_arn,
+            ud.is_active
+        FROM user_devices ud
+        INNER JOIN organization_users ou
+            ON ud.user_id = ou.user_id
+        WHERE ud.is_active = TRUE
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(device_cache_from_rows(rows))
+}
+
 fn cache_from_rows(rows: Vec<PermissionRow>) -> PermissionCache {
     let mut grouped: HashMap<PermissionKey, HashSet<UnitId>> = HashMap::new();
+    let mut by_unit_grouped: HashMap<UnitId, HashSet<PermissionKey>> = HashMap::new();
 
     for row in rows {
         grouped
             .entry((row.organization_id, row.user_id))
             .or_default()
             .insert(row.unit_id);
+
+        by_unit_grouped
+            .entry(row.unit_id)
+            .or_default()
+            .insert((row.organization_id, row.user_id));
     }
 
     let mut cache = HashMap::with_capacity(grouped.len());
@@ -61,7 +102,41 @@ fn cache_from_rows(rows: Vec<PermissionRow>) -> PermissionCache {
         cache.insert(key, Arc::new(unit_ids));
     }
 
-    PermissionCache::new(cache)
+    let mut by_unit = HashMap::with_capacity(by_unit_grouped.len());
+    for (unit_id, users) in by_unit_grouped {
+        let mut allowed_users = users.into_iter().collect::<Vec<PermissionKey>>();
+        allowed_users.sort_unstable();
+        by_unit.insert(unit_id, Arc::new(allowed_users));
+    }
+
+    PermissionCache::new(cache, by_unit)
+}
+
+fn device_cache_from_rows(rows: Vec<DeviceRow>) -> UserDevicesCache {
+    let mut grouped: HashMap<PermissionKey, Vec<UserDevice>> = HashMap::new();
+
+    for row in rows {
+        let device = UserDevice {
+            id: row.device_id,
+            user_id: row.user_id,
+            device_token: row.device_token,
+            platform: row.platform,
+            endpoint_arn: row.endpoint_arn.unwrap_or_default(),
+            is_active: row.is_active,
+        };
+
+        grouped
+            .entry((row.organization_id, row.user_id))
+            .or_default()
+            .push(device);
+    }
+
+    let mut cache = HashMap::with_capacity(grouped.len());
+    for (key, devices) in grouped {
+        cache.insert(key, Arc::new(devices));
+    }
+
+    UserDevicesCache::new(cache)
 }
 
 #[cfg(test)]

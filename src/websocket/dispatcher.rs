@@ -44,26 +44,26 @@ impl AlertDispatcher {
         };
 
         let targets = self.registry.senders_for_unit(&unit_id).await;
-        if targets.is_empty() {
-            debug!(unit_id = %event.unit_id, "no_subscribers_for_unit");
-            return;
-        }
 
         let mut sent_count = 0usize;
-        for (connection_id, sender) in targets {
-            match sender.try_send(message.clone()) {
-                Ok(()) => {
-                    sent_count += 1;
-                }
-                Err(TrySendError::Full(_)) => {
-                    debug!(
-                        connection_id = %connection_id,
-                        unit_id = %event.unit_id,
-                        "dropping_message_due_to_backpressure"
-                    );
-                }
-                Err(TrySendError::Closed(_)) => {
-                    let _ = self.registry.remove_connection(&connection_id).await;
+        if targets.is_empty() {
+            debug!(unit_id = %event.unit_id, "no_subscribers_for_unit");
+        } else {
+            for (connection_id, sender) in targets {
+                match sender.try_send(message.clone()) {
+                    Ok(()) => {
+                        sent_count += 1;
+                    }
+                    Err(TrySendError::Full(_)) => {
+                        debug!(
+                            connection_id = %connection_id,
+                            unit_id = %event.unit_id,
+                            "dropping_message_due_to_backpressure"
+                        );
+                    }
+                    Err(TrySendError::Closed(_)) => {
+                        let _ = self.registry.remove_connection(&connection_id).await;
+                    }
                 }
             }
         }

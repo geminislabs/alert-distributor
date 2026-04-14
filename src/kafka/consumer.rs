@@ -8,15 +8,21 @@ use tracing::{debug, error, info, warn};
 use crate::config::AppConfig;
 use crate::errors::AppResult;
 use crate::models::alert_event::AlertEvent;
+use crate::sns::SnsDispatcher;
 use crate::websocket::dispatcher::AlertDispatcher;
 
 pub struct AlertsConsumer {
     consumer: StreamConsumer,
-    dispatcher: Arc<AlertDispatcher>,
+    ws_dispatcher: Arc<AlertDispatcher>,
+    sns_dispatcher: Arc<SnsDispatcher>,
 }
 
 impl AlertsConsumer {
-    pub fn new(config: &AppConfig, dispatcher: Arc<AlertDispatcher>) -> AppResult<Self> {
+    pub fn new(
+        config: &AppConfig,
+        ws_dispatcher: Arc<AlertDispatcher>,
+        sns_dispatcher: Arc<SnsDispatcher>,
+    ) -> AppResult<Self> {
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", &config.kafka_brokers)
             .set("group.id", &config.kafka_group_id)
@@ -30,7 +36,8 @@ impl AlertsConsumer {
 
         Ok(Self {
             consumer,
-            dispatcher,
+            ws_dispatcher,
+            sns_dispatcher,
         })
     }
 
@@ -76,7 +83,10 @@ impl AlertsConsumer {
                     "alert_event_ingested"
                 );
 
-                self.dispatcher.dispatch_event(&event).await;
+                tokio::join!(
+                    self.ws_dispatcher.dispatch_event(&event),
+                    self.sns_dispatcher.dispatch_event(&event)
+                );
 
                 if let Err(err) = self.consumer.commit_message(&message, CommitMode::Async) {
                     error!(

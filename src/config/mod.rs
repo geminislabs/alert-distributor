@@ -22,6 +22,10 @@ pub struct AppConfig {
     pub ws_heartbeat_interval_secs: u64,
     pub ws_heartbeat_timeout_secs: u64,
     pub jwt_public_key_pem: String,
+    pub aws_region: String,
+    pub sns_enabled: bool,
+    pub sns_retry_count: u32,
+    pub sns_batch_timeout_ms: u64,
 }
 
 impl AppConfig {
@@ -52,6 +56,23 @@ impl AppConfig {
 
         let jwt_public_key_pem = get_required_var("JWT_PUBLIC_KEY_PEM")?.replace("\\n", "\n");
 
+        let aws_region = get_optional_var("AWS_REGION").unwrap_or_else(|| "us-east-1".to_string());
+
+        let sns_enabled = get_optional_var("SNS_ENABLED")
+            .unwrap_or_else(|| "false".to_string())
+            .parse::<bool>()
+            .map_err(|_| AppError::InvalidEnvVar("SNS_ENABLED".to_string()))?;
+
+        let sns_retry_count = get_optional_var("SNS_RETRY_COUNT")
+            .unwrap_or_else(|| "3".to_string())
+            .parse::<u32>()
+            .map_err(|_| AppError::InvalidEnvVar("SNS_RETRY_COUNT".to_string()))?;
+
+        let sns_batch_timeout_ms = get_optional_var("SNS_BATCH_TIMEOUT_MS")
+            .unwrap_or_else(|| "100".to_string())
+            .parse::<u64>()
+            .map_err(|_| AppError::InvalidEnvVar("SNS_BATCH_TIMEOUT_MS".to_string()))?;
+
         Ok(Self {
             db_host: get_required_var("DB_HOST")?,
             db_user: get_required_var("DB_USER")?,
@@ -71,6 +92,10 @@ impl AppConfig {
             ws_heartbeat_interval_secs,
             ws_heartbeat_timeout_secs,
             jwt_public_key_pem,
+            aws_region,
+            sns_enabled,
+            sns_retry_count,
+            sns_batch_timeout_ms,
         })
     }
 }

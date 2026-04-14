@@ -41,6 +41,10 @@ jobs:
       WS_HEARTBEAT_INTERVAL_SECS: ${{ vars.WS_HEARTBEAT_INTERVAL_SECS }}
       WS_HEARTBEAT_TIMEOUT_SECS: ${{ vars.WS_HEARTBEAT_TIMEOUT_SECS }}
       JWT_PUBLIC_KEY_PEM: ${{ vars.JWT_PUBLIC_KEY_PEM }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      SNS_ENABLED: ${{ vars.SNS_ENABLED }}
+      SNS_RETRY_COUNT: ${{ vars.SNS_RETRY_COUNT }}
+      SNS_BATCH_TIMEOUT_MS: ${{ vars.SNS_BATCH_TIMEOUT_MS }}
 
       # Passwords come from GitHub Secrets
       DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
@@ -93,13 +97,15 @@ jobs:
           overwrite: true
 
       - name: Build and run container in EC2
+        timeout-minutes: 25
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.EC2_HOST }}
           username: ${{ env.EC2_USERNAME }}
           key: ${{ env.EC2_SSH_KEY }}
           port: ${{ env.EC2_SSH_PORT }}
-          envs: APP_NAME,APP_DIR,RELEASE_TAG,DB_HOST,DB_USER,DB_PASSWORD,DB_PORT,DB_NAME,KAFKA_BROKERS,KAFKA_TOPIC,KAFKA_GROUP_ID,RUST_LOG,KAFKA_SASL_MECHANISM,KAFKA_USERNAME,KAFKA_PASSWORD,KAFKA_SECURITY_PROTOCOL,WS_BIND_ADDR,WS_CHANNEL_CAPACITY,WS_HEARTBEAT_INTERVAL_SECS,WS_HEARTBEAT_TIMEOUT_SECS,JWT_PUBLIC_KEY_PEM
+          envs: APP_NAME,APP_DIR,RELEASE_TAG,DB_HOST,DB_USER,DB_PASSWORD,DB_PORT,DB_NAME,KAFKA_BROKERS,KAFKA_TOPIC,KAFKA_GROUP_ID,RUST_LOG,KAFKA_SASL_MECHANISM,KAFKA_USERNAME,KAFKA_PASSWORD,KAFKA_SECURITY_PROTOCOL,WS_BIND_ADDR,WS_CHANNEL_CAPACITY,WS_HEARTBEAT_INTERVAL_SECS,WS_HEARTBEAT_TIMEOUT_SECS,JWT_PUBLIC_KEY_PEM,AWS_REGION,SNS_ENABLED,SNS_RETRY_COUNT,SNS_BATCH_TIMEOUT_MS
+          command_timeout: 20m
           script_stop: true
           script: |
             set -euo pipefail
@@ -129,6 +135,10 @@ jobs:
               printf 'WS_HEARTBEAT_INTERVAL_SECS=%s\n' "${WS_HEARTBEAT_INTERVAL_SECS}"
               printf 'WS_HEARTBEAT_TIMEOUT_SECS=%s\n'  "${WS_HEARTBEAT_TIMEOUT_SECS}"
               printf 'JWT_PUBLIC_KEY_PEM=%s\n'         "${JWT_PUBLIC_KEY_PEM//$'\n'/\\n}"
+              printf 'AWS_REGION=%s\n'                  "${AWS_REGION}"
+              printf 'SNS_ENABLED=%s\n'                 "${SNS_ENABLED}"
+              printf 'SNS_RETRY_COUNT=%s\n'             "${SNS_RETRY_COUNT}"
+              printf 'SNS_BATCH_TIMEOUT_MS=%s\n'        "${SNS_BATCH_TIMEOUT_MS}"
             } > .env.production
 
             APP_PORT="${WS_BIND_ADDR##*:}"
