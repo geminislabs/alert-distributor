@@ -29,7 +29,7 @@ impl SnsMessage {
 
     pub fn to_json_payload(&self) -> String {
         let gcm_payload = format!(
-            r#"{{ "notification": {{ "title": "{}", "body": "{}" }}, "data": {{ "message": "{}" }} }}"#,
+            r#"{{ "notification": {{ "title": "{}", "body": "{}", "sound": "default" }}, "data": {{ "message": "{}" }} }}"#,
             self.title, self.body, self.body
         );
 
@@ -82,7 +82,7 @@ mod tests {
 
         println!("SNS payload generated: {}", payload);
 
-        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"alert-type\", \"body\": \"rule-123+unit-456\" }, \"data\": { \"message\": \"rule-123+unit-456\" } }"}"#;
+        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"alert-type\", \"body\": \"rule-123+unit-456\", \"sound\": \"default\" }, \"data\": { \"message\": \"rule-123+unit-456\" } }"}"#;
         assert_eq!(payload, expected);
     }
 }
