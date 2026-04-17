@@ -267,6 +267,8 @@ asyncio.run(main())
 {
 	"type": "alert",
 	"unit_id": "33333333-3333-3333-3333-333333333333",
+	"title": "Engine is OFF",
+	"body": "Unit Name",
 	"data": {
 		"engine_status": "OFF"
 	},
@@ -277,6 +279,8 @@ asyncio.run(main())
 Campos:
 - `type`: tipo de mensaje (`alert`)
 - `unit_id`: unidad origen del evento
+- `title`: usa `alert_name`; si llega vacio o null, usa `alert_type`
+- `body`: usa `unit_name`; si llega vacio o null, se envia `""`
 - `data`: payload del evento
 - `occurred_at`: timestamp UTC
 
@@ -309,8 +313,120 @@ Formato de mensaje enviado al cliente:
 {
 	"type": "alert",
 	"unit_id": "33333333-3333-3333-3333-333333333333",
+	"title": "Engine is OFF",
+	"body": "Unit Name",
 	"data": {"engine_status": "OFF"},
 	"occurred_at": "2026-03-29T20:56:34Z"
+}
+```
+
+## Ejemplos completos de salida (WebSocket y SNS)
+
+Reglas aplicadas por el servicio:
+- `title`: usa `alert_name`; si viene `null`, vacio o solo espacios, usa `alert_type`.
+- `body`: usa `unit_name`; si viene `null`, vacio o solo espacios, envia `""`.
+
+### Caso A: evento con `unit_name` y `alert_name`
+
+Evento de entrada (Kafka):
+
+```json
+{
+	"id": "7a4b6929-9f8b-4d2e-a68e-1a8e8ea4f1d3",
+	"organization_id": "c24ba579-6a27-42d9-a398-0486fbe54f8c",
+	"unit_id": "18961401-9405-4124-8d2a-e2c445d11e1a",
+	"unit_name": "Camioneta Juan",
+	"rule_id": "3b6afa2b-0f8d-4ef2-bdbf-bb20c8af9ae6",
+	"source_type": "event",
+	"source_id": "aaaabbbb-cccc-dddd-eeee-ffff11112222",
+	"alert_type": "64f9709b-8d4c-4b2e-b1ab-44b015527ba5",
+	"alert_name": "Ingreso a geocerca",
+	"payload": {
+		"uuid": "550e8400-e29b-41d4-a716-446655440003",
+		"device_id": "device-001",
+		"msg_class": "POSITION",
+		"latitude": -33.8423,
+		"longitude": -56.1605,
+		"geofence_id": "550e8400-e29b-41d4-a716-446655440001"
+	},
+	"occurred_at": "2026-04-16T14:40:10Z"
+}
+```
+
+Salida por WebSocket:
+
+```json
+{
+	"type": "alert",
+	"unit_id": "18961401-9405-4124-8d2a-e2c445d11e1a",
+	"title": "Ingreso a geocerca",
+	"body": "Camioneta Juan",
+	"data": {
+		"uuid": "550e8400-e29b-41d4-a716-446655440003",
+		"device_id": "device-001",
+		"msg_class": "POSITION",
+		"latitude": -33.8423,
+		"longitude": -56.1605,
+		"geofence_id": "550e8400-e29b-41d4-a716-446655440001"
+	},
+	"occurred_at": "2026-04-16T14:40:10Z"
+}
+```
+
+Payload SNS publicado (estructura final):
+
+```json
+{
+	"default": "alert",
+	"GCM": "{ \"notification\": { \"title\": \"Ingreso a geocerca\", \"body\": \"Camioneta Juan\", \"sound\": \"default\" }, \"data\": { \"message\": \"Camioneta Juan\" } }"
+}
+```
+
+### Caso B: `unit_name = null` y `alert_name` vacio
+
+Evento de entrada (Kafka):
+
+```json
+{
+	"id": "c79fd4ad-81c9-4b42-a051-3a32d4a1d0e0",
+	"organization_id": "d7e11a4b-017b-4799-bf66-77f0eab0f91d",
+	"unit_id": "0c2d17d2-1968-4e58-95c0-c5539ae196fd",
+	"unit_name": null,
+	"rule_id": "417d8f6d-081d-4022-9d1a-b92b3fd3b851",
+	"source_type": "event",
+	"source_id": "0ef2f6a4-9a32-48da-b394-0bd0c81df0c2",
+	"alert_type": "ignition_off",
+	"alert_name": "   ",
+	"payload": {
+		"engine": "off",
+		"speed": 0
+	},
+	"occurred_at": "2026-04-07T14:20:00Z"
+}
+```
+
+Salida por WebSocket:
+
+```json
+{
+	"type": "alert",
+	"unit_id": "0c2d17d2-1968-4e58-95c0-c5539ae196fd",
+	"title": "ignition_off",
+	"body": "",
+	"data": {
+		"engine": "off",
+		"speed": 0
+	},
+	"occurred_at": "2026-04-07T14:20:00Z"
+}
+```
+
+Payload SNS publicado (estructura final):
+
+```json
+{
+	"default": "alert",
+	"GCM": "{ \"notification\": { \"title\": \"ignition_off\", \"body\": \"\", \"sound\": \"default\" }, \"data\": { \"message\": \"\" } }"
 }
 ```
 

@@ -16,6 +16,8 @@ pub struct ClientAlertMessage {
     #[serde(rename = "type")]
     pub message_type: String,
     pub unit_id: String,
+    pub title: String,
+    pub body: String,
     pub data: Value,
     pub occurred_at: DateTime<Utc>,
 }
@@ -39,6 +41,8 @@ impl AlertDispatcher {
         let message = ClientAlertMessage {
             message_type: "alert".to_string(),
             unit_id: event.unit_id.clone(),
+            title: event.notification_title(),
+            body: event.notification_body(),
             data: event.payload.clone(),
             occurred_at: event.occurred_at,
         };

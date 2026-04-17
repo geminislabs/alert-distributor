@@ -20,9 +20,9 @@ pub struct SnsMessage {
 }
 
 impl SnsMessage {
-    pub fn new(rule_name: &str, unit_id: &str, alert_type: &str) -> Self {
-        let body = format!("{}+{}", rule_name, unit_id);
-        let title = alert_type.to_string();
+    pub fn new(title: &str, body: &str) -> Self {
+        let title = title.to_string();
+        let body = body.to_string();
 
         Self { body, title }
     }
@@ -77,12 +77,21 @@ mod tests {
 
     #[test]
     fn sns_payload_format_is_correct() {
-        let message = SnsMessage::new("rule-123", "unit-456", "alert-type");
+        let message = SnsMessage::new("Ingreso a geocerca", "Camioneta Juan");
         let payload = message.to_json_payload();
 
         println!("SNS payload generated: {}", payload);
 
-        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"alert-type\", \"body\": \"rule-123+unit-456\", \"sound\": \"default\" }, \"data\": { \"message\": \"rule-123+unit-456\" } }"}"#;
+        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"Ingreso a geocerca\", \"body\": \"Camioneta Juan\", \"sound\": \"default\" }, \"data\": { \"message\": \"Camioneta Juan\" } }"}"#;
+        assert_eq!(payload, expected);
+    }
+
+    #[test]
+    fn sns_payload_allows_empty_body() {
+        let message = SnsMessage::new("Motor apagado", "");
+        let payload = message.to_json_payload();
+
+        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"Motor apagado\", \"body\": \"\", \"sound\": \"default\" }, \"data\": { \"message\": \"\" } }"}"#;
         assert_eq!(payload, expected);
     }
 }
