@@ -50,6 +50,17 @@ impl SnsMessage {
             },
             "data": {
                 "message": self.body
+            },
+            "apns": {
+                "payload": {
+                    "aps": {
+                        "alert": {
+                            "title": self.title,
+                            "body": self.body,
+                        },
+                        "sound": "alert_default.caf"
+                    }
+                }
             }
         });
 
@@ -110,6 +121,15 @@ mod tests {
         let gcm: serde_json::Value = serde_json::from_str(gcm_str).unwrap();
         assert_eq!(gcm["notification"]["title"], "Ingreso a geocerca");
         assert_eq!(gcm["notification"]["body"], "Camioneta Juan");
+        assert_eq!(
+            gcm["apns"]["payload"]["aps"]["alert"]["title"],
+            "Ingreso a geocerca"
+        );
+        assert_eq!(
+            gcm["apns"]["payload"]["aps"]["alert"]["body"],
+            "Camioneta Juan"
+        );
+        assert_eq!(gcm["apns"]["payload"]["aps"]["sound"], "alert_default.caf");
     }
 
     #[test]
@@ -123,5 +143,9 @@ mod tests {
 
         assert_eq!(gcm["notification"]["title"], "Alerta \"Crítica\"");
         assert_eq!(gcm["notification"]["body"], "Línea 1\nLínea 2");
+        assert_eq!(
+            gcm["apns"]["payload"]["aps"]["alert"]["title"],
+            "Alerta \"Crítica\""
+        );
     }
 }
