@@ -36,6 +36,41 @@ impl AlertEvent {
             .map(ToOwned::to_owned)
             .unwrap_or_default()
     }
+
+    pub fn sns_notification_title(&self) -> String {
+        let title = self.notification_title();
+
+        if self.is_geofence_alert() {
+            return format!("📍 {}", title);
+        }
+
+        if self.is_ignition_alert() {
+            return format!("⏻ {}", title);
+        }
+
+        title
+    }
+
+    fn is_geofence_alert(&self) -> bool {
+        self.matches_alert_keyword(&["geocerca", "geofence"])
+    }
+
+    fn is_ignition_alert(&self) -> bool {
+        self.matches_alert_keyword(&["ignicion", "ignición", "ignition", "engine", "motor"])
+    }
+
+    fn matches_alert_keyword(&self, keywords: &[&str]) -> bool {
+        let alert_type = self.alert_type.to_lowercase();
+        let alert_name = self
+            .alert_name
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase();
+
+        keywords
+            .iter()
+            .any(|keyword| alert_type.contains(keyword) || alert_name.contains(keyword))
+    }
 }
 
 #[cfg(test)]
@@ -122,5 +157,31 @@ mod tests {
 
         assert_eq!(parsed.notification_title(), "Engine OFF");
         assert_eq!(parsed.notification_body(), "");
+    }
+
+    #[test]
+    fn sns_title_includes_geofence_emoji_for_geofence_alerts() {
+        let sample_event = r#"{
+  "id": "11111111-1111-1111-1111-111111111111",
+  "organization_id": "22222222-2222-2222-2222-222222222222",
+  "unit_id": "33333333-3333-3333-3333-333333333333",
+  "unit_name": "Unidad 1",
+  "rule_id": "44444444-4444-4444-4444-444444444444",
+  "source_type": "event",
+  "source_id": "55555555-5555-5555-5555-555555555555",
+  "alert_type": "Ingreso a geocerca",
+  "alert_name": "Entrada geocerca",
+  "payload": {},
+  "occurred_at": "2026-03-29T20:56:34Z"
+}"#;
+
+        let parsed: AlertEvent = serde_json::from_str(sample_event).expect("event should parse");
+        assert_eq!(parsed.sns_notification_title(), "📍 Entrada geocerca");
+    }
+
+    #[test]
+    fn sns_title_includes_ignition_emoji_for_ignition_alerts() {
+        let parsed: AlertEvent = serde_json::from_str(SAMPLE_EVENT).expect("event should parse");
+        assert_eq!(parsed.sns_notification_title(), "⏻ Engine is OFF");
     }
 }

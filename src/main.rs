@@ -181,7 +181,7 @@ async fn process_sns_delivery(
 ) {
     use tracing::warn;
 
-    let message = sns::SnsMessage::new(&event.notification_title(), &event.notification_body());
+    let message = sns::SnsMessage::new(&event.sns_notification_title(), &event.notification_body());
     let payload = message.to_json_payload();
 
     info!(
