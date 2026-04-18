@@ -29,7 +29,7 @@ impl SnsMessage {
 
     pub fn to_json_payload(&self) -> String {
         let gcm_payload = format!(
-            r#"{{ "notification": {{ "title": "{}", "body": "{}", "sound": "default" }}, "data": {{ "message": "{}" }} }}"#,
+            r#"{{ "notification": {{ "title": "{}", "body": "{}", "sound": "alert_default.caf" }}, "data": {{ "message": "{}" }} }}"#,
             self.title, self.body, self.body
         );
 
@@ -82,7 +82,7 @@ mod tests {
 
         println!("SNS payload generated: {}", payload);
 
-        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"Ingreso a geocerca\", \"body\": \"Camioneta Juan\", \"sound\": \"default\" }, \"data\": { \"message\": \"Camioneta Juan\" } }"}"#;
+        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"Ingreso a geocerca\", \"body\": \"Camioneta Juan\", \"sound\": \"alert_default.caf\" }, \"data\": { \"message\": \"Camioneta Juan\" } }"}"#;
         assert_eq!(payload, expected);
     }
 
@@ -91,7 +91,7 @@ mod tests {
         let message = SnsMessage::new("Motor apagado", "");
         let payload = message.to_json_payload();
 
-        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"Motor apagado\", \"body\": \"\", \"sound\": \"default\" }, \"data\": { \"message\": \"\" } }"}"#;
+        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"Motor apagado\", \"body\": \"\", \"sound\": \"alert_default.caf\" }, \"data\": { \"message\": \"\" } }"}"#;
         assert_eq!(payload, expected);
     }
 }
