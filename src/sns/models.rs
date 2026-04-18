@@ -28,24 +28,42 @@ impl SnsMessage {
     }
 
     pub fn to_json_payload(&self) -> String {
-        let gcm_payload = format!(
-            r#"{{ "notification": {{ "title": "{}", "body": "{}", "sound": "alert_default.caf" }}, "data": {{ "message": "{}" }} }}"#,
-            self.title, self.body, self.body
-        );
+        use serde_json::json;
 
-        format!(
-            r#"{{"default":"alert","GCM":"{}"}}"#,
-            escape_json(&gcm_payload)
-        )
+        // APNS Payload (for direct APNS or APNS_SANDBOX endpoints)
+        let apns_payload = json!({
+            "aps": {
+                "alert": {
+                    "title": self.title,
+                    "body": self.body,
+                },
+                "sound": "alert_default.caf"
+            }
+        });
+
+        // GCM Payload (for FCM endpoints)
+        let gcm_payload = json!({
+            "notification": {
+                "title": self.title,
+                "body": self.body,
+                "sound": "alert_default.caf"
+            },
+            "data": {
+                "message": self.body
+            }
+        });
+
+        // SNS Wrapper
+        // Note: SNS expects the platform-specific payloads to be JSON strings themselves.
+        let sns_payload = json!({
+            "default": "alert",
+            "APNS": apns_payload.to_string(),
+            "APNS_SANDBOX": apns_payload.to_string(),
+            "GCM": gcm_payload.to_string()
+        });
+
+        sns_payload.to_string()
     }
-}
-
-fn escape_json(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
 }
 
 #[derive(Debug, Clone)]
@@ -80,18 +98,30 @@ mod tests {
         let message = SnsMessage::new("Ingreso a geocerca", "Camioneta Juan");
         let payload = message.to_json_payload();
 
-        println!("SNS payload generated: {}", payload);
+        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
 
-        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"Ingreso a geocerca\", \"body\": \"Camioneta Juan\", \"sound\": \"alert_default.caf\" }, \"data\": { \"message\": \"Camioneta Juan\" } }"}"#;
-        assert_eq!(payload, expected);
+        assert_eq!(parsed["default"], "alert");
+        assert!(parsed.get("APNS").is_some());
+        assert!(parsed.get("APNS_SANDBOX").is_some());
+        assert!(parsed.get("GCM").is_some());
+
+        // Verify GCM content
+        let gcm_str = parsed["GCM"].as_str().unwrap();
+        let gcm: serde_json::Value = serde_json::from_str(gcm_str).unwrap();
+        assert_eq!(gcm["notification"]["title"], "Ingreso a geocerca");
+        assert_eq!(gcm["notification"]["body"], "Camioneta Juan");
     }
 
     #[test]
-    fn sns_payload_allows_empty_body() {
-        let message = SnsMessage::new("Motor apagado", "");
+    fn sns_payload_handles_special_characters() {
+        let message = SnsMessage::new("Alerta \"Crítica\"", "Línea 1\nLínea 2");
         let payload = message.to_json_payload();
 
-        let expected = r#"{"default":"alert","GCM":"{ \"notification\": { \"title\": \"Motor apagado\", \"body\": \"\", \"sound\": \"alert_default.caf\" }, \"data\": { \"message\": \"\" } }"}"#;
-        assert_eq!(payload, expected);
+        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        let gcm_str = parsed["GCM"].as_str().unwrap();
+        let gcm: serde_json::Value = serde_json::from_str(gcm_str).unwrap();
+
+        assert_eq!(gcm["notification"]["title"], "Alerta \"Crítica\"");
+        assert_eq!(gcm["notification"]["body"], "Línea 1\nLínea 2");
     }
 }
