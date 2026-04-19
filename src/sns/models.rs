@@ -31,36 +31,34 @@ impl SnsMessage {
         use serde_json::json;
 
         // APNS Payload (for direct APNS or APNS_SANDBOX endpoints)
+        // High priority for iOS is essential for background delivery in production (TestFlight)
         let apns_payload = json!({
             "aps": {
                 "alert": {
                     "title": self.title,
                     "body": self.body,
                 },
-                "sound": "alert_default.caf"
+                "sound": "alert_default.caf",
+                "content-available": 1
             }
         });
 
         // GCM Payload (for FCM endpoints)
+        // Note: For iOS devices registered via GCM/FCM:
+        // 1. "priority": "high" is mandatory for reliable delivery in production.
+        // 2. "content_available": true ensures the app is woken up.
         let gcm_payload = json!({
+            "priority": "high",
+            "content_available": true,
             "notification": {
                 "title": self.title,
                 "body": self.body,
-                "sound": "alert_default.caf"
+                "sound": "alert_default.caf",
+                "click_action": "TOP_STORY_NOTIFICATION"
             },
             "data": {
-                "message": self.body
-            },
-            "apns": {
-                "payload": {
-                    "aps": {
-                        "alert": {
-                            "title": self.title,
-                            "body": self.body,
-                        },
-                        "sound": "alert_default.caf"
-                    }
-                }
+                "message": self.body,
+                "title": self.title,
             }
         });
 
@@ -119,17 +117,18 @@ mod tests {
         // Verify GCM content
         let gcm_str = parsed["GCM"].as_str().unwrap();
         let gcm: serde_json::Value = serde_json::from_str(gcm_str).unwrap();
+        assert_eq!(gcm["priority"], "high");
+        assert_eq!(gcm["content_available"], true);
         assert_eq!(gcm["notification"]["title"], "Ingreso a geocerca");
         assert_eq!(gcm["notification"]["body"], "Camioneta Juan");
-        assert_eq!(
-            gcm["apns"]["payload"]["aps"]["alert"]["title"],
-            "Ingreso a geocerca"
-        );
-        assert_eq!(
-            gcm["apns"]["payload"]["aps"]["alert"]["body"],
-            "Camioneta Juan"
-        );
-        assert_eq!(gcm["apns"]["payload"]["aps"]["sound"], "alert_default.caf");
+        assert_eq!(gcm["notification"]["sound"], "alert_default.caf");
+
+        // Verify APNS content
+        let apns_str = parsed["APNS"].as_str().unwrap();
+        let apns: serde_json::Value = serde_json::from_str(apns_str).unwrap();
+        assert_eq!(apns["aps"]["alert"]["title"], "Ingreso a geocerca");
+        assert_eq!(apns["aps"]["sound"], "alert_default.caf");
+        assert_eq!(apns["aps"]["content-available"], 1);
     }
 
     #[test]
@@ -143,9 +142,5 @@ mod tests {
 
         assert_eq!(gcm["notification"]["title"], "Alerta \"Crítica\"");
         assert_eq!(gcm["notification"]["body"], "Línea 1\nLínea 2");
-        assert_eq!(
-            gcm["apns"]["payload"]["aps"]["alert"]["title"],
-            "Alerta \"Crítica\""
-        );
     }
 }
