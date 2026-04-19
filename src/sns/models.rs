@@ -44,21 +44,39 @@ impl SnsMessage {
         });
 
         // GCM Payload (for FCM endpoints)
-        // Note: For iOS devices registered via GCM/FCM:
-        // 1. "priority": "high" is mandatory for reliable delivery in production.
-        // 2. "content_available": true ensures the app is woken up.
+        // Note: Using fcmV1Message structure for FCM HTTP v1 API.
+        // This is strictly required by AWS SNS when using Token Auth
+        // to avoid THIRD_PARTY_AUTH_ERROR from Firebase.
         let gcm_payload = json!({
-            "priority": "high",
-            "content_available": true,
-            "notification": {
-                "title": self.title,
-                "body": self.body,
-                "sound": "alert_default.caf",
-                "click_action": "TOP_STORY_NOTIFICATION"
-            },
-            "data": {
-                "message": self.body,
-                "title": self.title,
+            "fcmV1Message": {
+                "message": {
+                    "notification": {
+                        "title": self.title,
+                        "body": self.body,
+                    },
+                    "data": {
+                        "message": self.body,
+                        "title": self.title,
+                    },
+                    "android": {
+                        "priority": "HIGH",
+                        "notification": {
+                            "sound": "alert_default.caf",
+                            "click_action": "TOP_STORY_NOTIFICATION"
+                        }
+                    },
+                    "apns": {
+                        "headers": {
+                            "apns-priority": "10"
+                        },
+                        "payload": {
+                            "aps": {
+                                "content-available": 1,
+                                "sound": "alert_default.caf"
+                            }
+                        }
+                    }
+                }
             }
         });
 
@@ -114,16 +132,34 @@ mod tests {
         assert!(parsed.get("APNS_SANDBOX").is_some());
         assert!(parsed.get("GCM").is_some());
 
-        // Verify GCM content
+        // Verify GCM content (FCM v1 format)
         let gcm_str = parsed["GCM"].as_str().unwrap();
         let gcm: serde_json::Value = serde_json::from_str(gcm_str).unwrap();
-        assert_eq!(gcm["priority"], "high");
-        assert_eq!(gcm["content_available"], true);
-        assert_eq!(gcm["notification"]["title"], "Ingreso a geocerca");
-        assert_eq!(gcm["notification"]["body"], "Camioneta Juan");
-        assert_eq!(gcm["notification"]["sound"], "alert_default.caf");
+        let message_obj = &gcm["fcmV1Message"]["message"];
 
-        // Verify APNS content
+        // Verify cross-platform notification setup inside FCM v1
+        assert_eq!(message_obj["notification"]["title"], "Ingreso a geocerca");
+        assert_eq!(message_obj["notification"]["body"], "Camioneta Juan");
+
+        // Verify Android overrides
+        assert_eq!(message_obj["android"]["priority"], "HIGH");
+        assert_eq!(
+            message_obj["android"]["notification"]["sound"],
+            "alert_default.caf"
+        );
+
+        // Verify APNS overrides inside FCM v1
+        assert_eq!(message_obj["apns"]["headers"]["apns-priority"], "10");
+        assert_eq!(
+            message_obj["apns"]["payload"]["aps"]["content-available"],
+            1
+        );
+        assert_eq!(
+            message_obj["apns"]["payload"]["aps"]["sound"],
+            "alert_default.caf"
+        );
+
+        // Verify direct APNS content (wrapper)
         let apns_str = parsed["APNS"].as_str().unwrap();
         let apns: serde_json::Value = serde_json::from_str(apns_str).unwrap();
         assert_eq!(apns["aps"]["alert"]["title"], "Ingreso a geocerca");
@@ -139,8 +175,9 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
         let gcm_str = parsed["GCM"].as_str().unwrap();
         let gcm: serde_json::Value = serde_json::from_str(gcm_str).unwrap();
+        let message_obj = &gcm["fcmV1Message"]["message"];
 
-        assert_eq!(gcm["notification"]["title"], "Alerta \"Crítica\"");
-        assert_eq!(gcm["notification"]["body"], "Línea 1\nLínea 2");
+        assert_eq!(message_obj["notification"]["title"], "Alerta \"Crítica\"");
+        assert_eq!(message_obj["notification"]["body"], "Línea 1\nLínea 2");
     }
 }
