@@ -110,6 +110,10 @@ impl SnsMessage {
                         },
                         "payload": {
                             "aps": {
+                                "alert": {
+                                    "title": self.title,
+                                    "body": self.body,
+                                },
                                 "content-available": 1,
                                 "sound": "alert_default.caf"
                             }
@@ -191,6 +195,14 @@ mod tests {
         // Verify APNS overrides inside FCM v1
         assert_eq!(message_obj["apns"]["headers"]["apns-priority"], "10");
         assert_eq!(
+            message_obj["apns"]["payload"]["aps"]["alert"]["title"],
+            "Ingreso a geocerca"
+        );
+        assert_eq!(
+            message_obj["apns"]["payload"]["aps"]["alert"]["body"],
+            "Camioneta Juan"
+        );
+        assert_eq!(
             message_obj["apns"]["payload"]["aps"]["content-available"],
             1
         );
@@ -219,6 +231,14 @@ mod tests {
 
         assert_eq!(message_obj["notification"]["title"], "Alerta \"Crítica\"");
         assert_eq!(message_obj["notification"]["body"], "Línea 1\nLínea 2");
+        assert_eq!(
+            message_obj["apns"]["payload"]["aps"]["alert"]["title"],
+            "Alerta \"Crítica\""
+        );
+        assert_eq!(
+            message_obj["apns"]["payload"]["aps"]["alert"]["body"],
+            "Línea 1\nLínea 2"
+        );
     }
 
     #[test]
