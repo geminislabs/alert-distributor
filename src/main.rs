@@ -14,7 +14,7 @@ use errors::AppResult;
 use futures::stream::{FuturesUnordered, StreamExt};
 use kafka::consumer::AlertsConsumer;
 use permissions::loader::{load_permission_snapshot, load_user_devices_snapshot};
-use sns::{SnsBroadcaster, SnsClient, SnsDispatcher};
+use sns::{SnsBroadcaster, SnsClient, SnsDispatcher, SnsMetrics, run_metrics_reporter};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
@@ -33,8 +33,18 @@ async fn main() -> AppResult<()> {
     let permission_cache = Arc::new(load_permission_snapshot(&db_pool).await?);
     let user_devices_cache = Arc::new(load_user_devices_snapshot(&db_pool).await?);
 
+    let sns_metrics = Arc::new(SnsMetrics::default());
+
+    // Spawn per-minute metrics reporter
+    {
+        let metrics = sns_metrics.clone();
+        tokio::spawn(async move {
+            run_metrics_reporter(metrics, Duration::from_secs(60)).await;
+        });
+    }
+
     // Initialize SNS client and broadcaster
-    let sns_broadcaster = Arc::new(SnsBroadcaster::new(1000));
+    let sns_broadcaster = Arc::new(SnsBroadcaster::new(1000, sns_metrics.clone()));
     let _sns_client = if config.sns_enabled {
         Some(SnsClient::new(&config).await?)
     } else {
@@ -49,6 +59,7 @@ async fn main() -> AppResult<()> {
         let user_devices_cache_worker = user_devices_cache.clone();
         let broadcaster_rx = sns_broadcaster.subscribe();
         let sns_batch_timeout = Duration::from_millis(config.sns_batch_timeout_ms);
+        let sns_metrics_worker = sns_metrics.clone();
         tokio::spawn(async move {
             sns_worker_task(
                 broadcaster_rx,
@@ -56,6 +67,7 @@ async fn main() -> AppResult<()> {
                 db_pool_worker,
                 user_devices_cache_worker,
                 sns_batch_timeout,
+                sns_metrics_worker,
             )
             .await;
         });
@@ -67,6 +79,7 @@ async fn main() -> AppResult<()> {
         permission_cache.clone(),
         user_devices_cache.clone(),
         sns_broadcaster.clone(),
+        sns_metrics.clone(),
     ));
     let jwt_validator = Arc::new(JwtValidator::new(&config)?);
     let ws_state = Arc::new(WsServerState::new(
@@ -122,15 +135,25 @@ async fn sns_worker_task(
     db_pool: db::postgres::DbPool,
     user_devices_cache: Arc<permissions::cache::UserDevicesCache>,
     batch_timeout: Duration,
+    metrics: Arc<SnsMetrics>,
 ) {
     use tracing::warn;
+
+    info!(
+        batch_timeout_ms = batch_timeout.as_millis(),
+        "sns_worker_started"
+    );
 
     loop {
         let first_item = match rx.recv().await {
             Ok(item) => item,
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                warn!("sns_worker_receiver_closed");
+                break;
+            }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                 warn!(skipped, "sns_worker_lagged_messages_skipped");
+                metrics.add_lagged(skipped);
                 continue;
             }
         };
@@ -144,6 +167,7 @@ async fn sns_worker_task(
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped))) => {
                     warn!(skipped, "sns_worker_lagged_messages_skipped");
+                    metrics.add_lagged(skipped);
                 }
                 Err(_) => break,
             }
@@ -160,9 +184,18 @@ async fn sns_worker_task(
             let sns_client = sns_client.clone();
             let db_pool = db_pool.clone();
             let user_devices_cache = user_devices_cache.clone();
+            let metrics = metrics.clone();
 
             tasks.push(async move {
-                process_sns_delivery(device, event, sns_client, db_pool, user_devices_cache).await;
+                process_sns_delivery(
+                    device,
+                    event,
+                    sns_client,
+                    db_pool,
+                    user_devices_cache,
+                    metrics,
+                )
+                .await;
             });
         }
 
@@ -178,6 +211,7 @@ async fn process_sns_delivery(
     sns_client: SnsClient,
     db_pool: db::postgres::DbPool,
     user_devices_cache: Arc<permissions::cache::UserDevicesCache>,
+    metrics: Arc<SnsMetrics>,
 ) {
     use tracing::warn;
 
@@ -197,6 +231,7 @@ async fn process_sns_delivery(
         .await
     {
         Ok(_) => {
+            metrics.inc_published();
             info!(
                 device_id = %device.id,
                 endpoint_arn = %device.endpoint_arn,
@@ -205,6 +240,7 @@ async fn process_sns_delivery(
             );
         }
         Err(sns::SnsError::InvalidEndpoint(msg)) => {
+            metrics.inc_failed();
             warn!(
                 device_id = %device.id,
                 endpoint_arn = %device.endpoint_arn,
@@ -228,6 +264,7 @@ async fn process_sns_delivery(
             }
         }
         Err(err) => {
+            metrics.inc_failed();
             warn!(
                 device_id = %device.id,
                 endpoint_arn = %device.endpoint_arn,

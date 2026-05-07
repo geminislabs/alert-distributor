@@ -13,6 +13,45 @@ pub struct UserDevice {
     pub is_active: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointChannel {
+    Gcm,
+    Apns,
+    ApnsSandbox,
+    Unknown,
+}
+
+impl UserDevice {
+    pub fn endpoint_channel(&self) -> EndpointChannel {
+        let Some(resource) = self.endpoint_arn.split(':').next_back() else {
+            return EndpointChannel::Unknown;
+        };
+
+        let mut segments = resource.split('/');
+        let Some(kind) = segments.nth(1) else {
+            return EndpointChannel::Unknown;
+        };
+
+        match kind {
+            "GCM" => EndpointChannel::Gcm,
+            "APNS" => EndpointChannel::Apns,
+            "APNS_SANDBOX" => EndpointChannel::ApnsSandbox,
+            _ => EndpointChannel::Unknown,
+        }
+    }
+
+    pub fn endpoint_is_supported_for_platform(&self) -> bool {
+        match self.platform.to_ascii_lowercase().as_str() {
+            "android" => matches!(self.endpoint_channel(), EndpointChannel::Gcm),
+            "ios" => matches!(
+                self.endpoint_channel(),
+                EndpointChannel::Gcm | EndpointChannel::Apns | EndpointChannel::ApnsSandbox
+            ),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SnsMessage {
     pub body: String,
@@ -118,7 +157,8 @@ impl std::error::Error for SnsError {}
 
 #[cfg(test)]
 mod tests {
-    use super::SnsMessage;
+    use super::{EndpointChannel, SnsMessage, UserDevice};
+    use uuid::Uuid;
 
     #[test]
     fn sns_payload_format_is_correct() {
@@ -179,5 +219,37 @@ mod tests {
 
         assert_eq!(message_obj["notification"]["title"], "Alerta \"Crítica\"");
         assert_eq!(message_obj["notification"]["body"], "Línea 1\nLínea 2");
+    }
+
+    #[test]
+    fn endpoint_channel_is_detected_from_arn() {
+        let device = UserDevice {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            device_token: "token".to_string(),
+            platform: "ios".to_string(),
+            endpoint_arn: "arn:aws:sns:us-east-1:123456789012:endpoint/GCM/app/endpoint-id"
+                .to_string(),
+            is_active: true,
+        };
+
+        assert_eq!(device.endpoint_channel(), EndpointChannel::Gcm);
+        assert!(device.endpoint_is_supported_for_platform());
+    }
+
+    #[test]
+    fn android_device_rejects_apns_endpoint() {
+        let device = UserDevice {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            device_token: "token".to_string(),
+            platform: "android".to_string(),
+            endpoint_arn: "arn:aws:sns:us-east-1:123456789012:endpoint/APNS/app/endpoint-id"
+                .to_string(),
+            is_active: true,
+        };
+
+        assert_eq!(device.endpoint_channel(), EndpointChannel::Apns);
+        assert!(!device.endpoint_is_supported_for_platform());
     }
 }
