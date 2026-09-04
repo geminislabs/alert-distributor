@@ -66,6 +66,7 @@ pub async fn ws_handler(
     let Some(unit_ids) = state
         .permission_cache
         .units_for(auth_context.organization_id, auth_context.user_id)
+        .await
         .filter(|unit_ids| !unit_ids.is_empty())
     else {
         warn!(

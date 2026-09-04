@@ -32,22 +32,29 @@ struct DeviceRow {
 pub async fn load_permission_snapshot(pool: &DbPool) -> AppResult<PermissionCache> {
     let rows = sqlx::query_as::<_, PermissionRow>(
         r#"
-        SELECT DISTINCT
-            u.organization_id,
-            ou.user_id,
-            u.id AS unit_id
+        SELECT u.organization_id, usr.id AS user_id, u.id AS unit_id
         FROM units u
-        LEFT JOIN unit_devices ud
+        INNER JOIN unit_devices ud
             ON ud.unit_id = u.id
            AND ud.unassigned_at IS NULL
-        LEFT JOIN devices d
-            ON d.device_id = ud.device_id
-        INNER JOIN organizations o
-            ON o.id = u.organization_id
-        INNER JOIN organization_users ou
-            ON o.id = ou.organization_id
+        INNER JOIN users usr
+            ON usr.organization_id = u.organization_id
+           AND usr.is_master IS TRUE
         WHERE u.deleted_at IS NULL
-          AND ud.is_active = TRUE
+
+        UNION
+
+        SELECT u.organization_id, uu.user_id, u.id AS unit_id
+        FROM user_units uu
+        INNER JOIN units u
+            ON u.id = uu.unit_id
+           AND u.deleted_at IS NULL
+        INNER JOIN unit_devices ud
+            ON ud.unit_id = u.id
+           AND ud.unassigned_at IS NULL
+        INNER JOIN users usr
+            ON usr.id = uu.user_id
+           AND COALESCE(usr.is_master, FALSE) IS FALSE
         "#,
     )
     .fetch_all(pool)
@@ -163,7 +170,8 @@ mod tests {
         ];
 
         let cache = cache_from_rows(rows);
-        let units = cache.units_for(org, user).expect("units should exist");
+        let units = futures::executor::block_on(cache.units_for(org, user))
+            .expect("units should exist");
 
         assert_eq!(units.len(), 1);
         assert_eq!(units[0], unit);
