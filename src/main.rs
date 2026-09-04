@@ -13,6 +13,7 @@ use db::postgres::connect_pool;
 use errors::AppResult;
 use futures::stream::{FuturesUnordered, StreamExt};
 use kafka::consumer::AlertsConsumer;
+use kafka::updates::{run_permission_reload_consumer, run_user_devices_updates_consumer};
 use permissions::loader::{load_permission_snapshot, load_user_devices_snapshot};
 use sns::{SnsBroadcaster, SnsClient, SnsDispatcher, SnsMetrics, run_metrics_reporter};
 use std::sync::Arc;
@@ -93,16 +94,75 @@ async fn main() -> AppResult<()> {
 
     let consumer = AlertsConsumer::new(&config, dispatcher.clone(), sns_dispatcher.clone())?;
 
+    let permission_snapshot_entries = permission_cache.len().await;
+    let user_devices_snapshot_entries = user_devices_cache.len().await;
     info!(
         brokers = %config.kafka_brokers,
         topic = %config.kafka_topic,
         group_id = %config.kafka_group_id,
         rust_log = %config.rust_log,
         ws_bind_addr = %config.ws_bind_addr,
-        permission_snapshot_entries = permission_cache.len(),
-        user_devices_snapshot_entries = user_devices_cache.len().await,
+        permission_snapshot_entries,
+        user_devices_snapshot_entries,
         "alert_distributor_started"
     );
+
+    {
+        let config = config.clone();
+        let db_pool = db_pool.clone();
+        let permission_cache = permission_cache.clone();
+        tokio::spawn(async move {
+            if let Err(err) = run_permission_reload_consumer(
+                config.clone(),
+                config.kafka_unit_devices_updates_topic.clone(),
+                config.kafka_unit_devices_updates_group_id.clone(),
+                "alert-distributor-unit-devices-updates",
+                db_pool,
+                permission_cache,
+            )
+            .await
+            {
+                error!(error = %err, "unit_devices_updates_consumer_stopped");
+            }
+        });
+    }
+
+    {
+        let config = config.clone();
+        let db_pool = db_pool.clone();
+        let permission_cache = permission_cache.clone();
+        tokio::spawn(async move {
+            if let Err(err) = run_permission_reload_consumer(
+                config.clone(),
+                config.kafka_user_units_updates_topic.clone(),
+                config.kafka_user_units_updates_group_id.clone(),
+                "alert-distributor-user-units-updates",
+                db_pool,
+                permission_cache,
+            )
+            .await
+            {
+                error!(error = %err, "user_units_updates_consumer_stopped");
+            }
+        });
+    }
+
+    {
+        let config = config.clone();
+        let user_devices_cache = user_devices_cache.clone();
+        tokio::spawn(async move {
+            if let Err(err) = run_user_devices_updates_consumer(
+                config.clone(),
+                config.kafka_user_devices_updates_topic.clone(),
+                config.kafka_user_devices_updates_group_id.clone(),
+                user_devices_cache,
+            )
+            .await
+            {
+                error!(error = %err, "user_devices_updates_consumer_stopped");
+            }
+        });
+    }
 
     tokio::select! {
         result = consumer.run(&config.kafka_topic) => {

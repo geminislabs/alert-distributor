@@ -44,7 +44,7 @@ impl SnsDispatcher {
         let mut skipped_empty_endpoint_count = 0usize;
         let mut skipped_unsupported_endpoint_count = 0usize;
 
-        if let Some(users) = self.permission_cache.users_for_unit(unit_id) {
+        if let Some(users) = self.permission_cache.users_for_unit(unit_id).await {
             for (organization_id, user_id) in users.iter() {
                 permitted_user_count += 1;
 
