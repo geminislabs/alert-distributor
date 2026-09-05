@@ -24,7 +24,7 @@ impl SnsBroadcaster {
         &self,
         event: &AlertEvent,
         devices: Vec<UserDevice>,
-    ) -> Result<(), broadcast::error::SendError<(UserDevice, AlertEvent)>> {
+    ) -> Result<(), broadcast::error::SendError<()>> {
         info!(
             event_id = %event.id,
             target_count = devices.len(),
@@ -33,7 +33,9 @@ impl SnsBroadcaster {
         );
 
         for device in devices {
-            self.tx.send((device, event.clone()))?;
+            self.tx
+                .send((device, event.clone()))
+                .map_err(|_| broadcast::error::SendError(()))?;
             self.metrics.inc_enqueued();
         }
         Ok(())

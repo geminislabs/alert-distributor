@@ -88,10 +88,8 @@ impl AppConfig {
             kafka_brokers: get_required_var("KAFKA_BROKERS")?,
             kafka_topic: get_required_var("KAFKA_TOPIC")?,
             kafka_group_id: get_required_var("KAFKA_GROUP_ID")?,
-            kafka_unit_devices_updates_topic: get_optional_var(
-                "KAFKA_UNIT_DEVICES_UPDATES_TOPIC",
-            )
-            .unwrap_or_else(|| "unit-devices-updates".to_string()),
+            kafka_unit_devices_updates_topic: get_optional_var("KAFKA_UNIT_DEVICES_UPDATES_TOPIC")
+                .unwrap_or_else(|| "unit-devices-updates".to_string()),
             kafka_unit_devices_updates_group_id: get_optional_var(
                 "KAFKA_UNIT_DEVICES_UPDATES_GROUP_ID",
             )
@@ -102,10 +100,8 @@ impl AppConfig {
                 "KAFKA_USER_UNITS_UPDATES_GROUP_ID",
             )
             .unwrap_or_else(|| "alert-distributor-user-units-updates".to_string()),
-            kafka_user_devices_updates_topic: get_optional_var(
-                "KAFKA_USER_DEVICES_UPDATES_TOPIC",
-            )
-            .unwrap_or_else(|| "user-devices-updates".to_string()),
+            kafka_user_devices_updates_topic: get_optional_var("KAFKA_USER_DEVICES_UPDATES_TOPIC")
+                .unwrap_or_else(|| "user-devices-updates".to_string()),
             kafka_user_devices_updates_group_id: get_optional_var(
                 "KAFKA_USER_DEVICES_UPDATES_GROUP_ID",
             )

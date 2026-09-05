@@ -89,11 +89,7 @@ pub async fn run_user_devices_updates_consumer(
     group_id: String,
     user_devices_cache: Arc<UserDevicesCache>,
 ) -> AppResult<()> {
-    let consumer = build_consumer(
-        &config,
-        &group_id,
-        "alert-distributor-user-devices-updates",
-    )?;
+    let consumer = build_consumer(&config, &group_id, "alert-distributor-user-devices-updates")?;
     consumer.subscribe(&[&topic])?;
     info!(topic = %topic, group_id = %group_id, "user_devices_updates_consumer_subscribed");
 
@@ -129,11 +125,7 @@ pub async fn run_user_devices_updates_consumer(
     Ok(())
 }
 
-async fn reload_permissions(
-    db_pool: &DbPool,
-    permission_cache: &PermissionCache,
-    topic: &str,
-) {
+async fn reload_permissions(db_pool: &DbPool, permission_cache: &PermissionCache, topic: &str) {
     match load_permission_snapshot(db_pool).await {
         Ok(snapshot) => {
             let entries = snapshot.len().await;

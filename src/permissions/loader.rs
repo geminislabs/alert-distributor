@@ -170,8 +170,8 @@ mod tests {
         ];
 
         let cache = cache_from_rows(rows);
-        let units = futures::executor::block_on(cache.units_for(org, user))
-            .expect("units should exist");
+        let units =
+            futures::executor::block_on(cache.units_for(org, user)).expect("units should exist");
 
         assert_eq!(units.len(), 1);
         assert_eq!(units[0], unit);
