@@ -11,11 +11,12 @@ use tracing::info;
 
 use crate::errors::AppResult;
 
-use self::handler::{WsServerState, ws_handler};
+use self::handler::{WsServerState, health_handler, ws_handler};
 
 pub async fn run_server(bind_addr: &str, state: Arc<WsServerState>) -> AppResult<()> {
     let app = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/health", get(health_handler))
         .with_state(state);
     let listener = TcpListener::bind(bind_addr).await?;
     info!(bind_addr = %bind_addr, "websocket_server_listening");

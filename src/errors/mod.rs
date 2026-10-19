@@ -30,4 +30,7 @@ pub enum AppError {
 
     #[error("http server error: {0}")]
     HttpServer(#[from] std::io::Error),
+
+    #[error("control plane topic not readable: {0}")]
+    ControlPlaneUnavailable(String),
 }

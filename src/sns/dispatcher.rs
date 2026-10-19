@@ -4,29 +4,26 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::models::alert_event::AlertEvent;
-use crate::permissions::cache::{PermissionCache, UserDevicesCache};
+use crate::permissions::cache::ControlPlaneCache;
 
 use super::metrics::SnsMetrics;
 use super::publisher::SnsBroadcaster;
 
 #[derive(Clone)]
 pub struct SnsDispatcher {
-    permission_cache: Arc<PermissionCache>,
-    user_devices_cache: Arc<UserDevicesCache>,
+    cache: Arc<ControlPlaneCache>,
     broadcaster: Arc<SnsBroadcaster>,
     metrics: Arc<SnsMetrics>,
 }
 
 impl SnsDispatcher {
     pub fn new(
-        permission_cache: Arc<PermissionCache>,
-        user_devices_cache: Arc<UserDevicesCache>,
+        cache: Arc<ControlPlaneCache>,
         broadcaster: Arc<SnsBroadcaster>,
         metrics: Arc<SnsMetrics>,
     ) -> Self {
         Self {
-            permission_cache,
-            user_devices_cache,
+            cache,
             broadcaster,
             metrics,
         }
@@ -44,15 +41,13 @@ impl SnsDispatcher {
         let mut skipped_empty_endpoint_count = 0usize;
         let mut skipped_unsupported_endpoint_count = 0usize;
 
-        if let Some(users) = self.permission_cache.users_for_unit(unit_id).await {
+        {
+            let users = self.cache.users_for_unit(unit_id).await;
             for (organization_id, user_id) in users.iter() {
                 permitted_user_count += 1;
 
-                if let Some(devices) = self
-                    .user_devices_cache
-                    .devices_for(*organization_id, *user_id)
-                    .await
-                {
+                let devices = self.cache.devices_for(*user_id).await;
+                if !devices.is_empty() {
                     for device in devices.iter() {
                         candidate_device_count += 1;
 

@@ -39,6 +39,7 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       ca-certificates \
+      curl \
       libssl3 \
       libsasl2-2 \
       librdkafka1 \
@@ -50,5 +51,10 @@ WORKDIR /app
 COPY --from=builder /app/target/release/alert-distributor /usr/local/bin/alert-distributor
 
 EXPOSE 8080
+
+# 503 si el consumidor de control-plane-events no puede leer (ADR-008 §9 de
+# siscom-admin-api). El puerto sale de WS_BIND_ADDR (host:puerto).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${WS_BIND_ADDR##*:}/health" > /dev/null || exit 1
 
 CMD ["/usr/local/bin/alert-distributor"]
