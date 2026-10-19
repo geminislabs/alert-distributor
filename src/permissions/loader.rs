@@ -37,8 +37,9 @@ pub async fn load_permission_snapshot(pool: &DbPool) -> AppResult<PermissionCach
         INNER JOIN unit_devices ud
             ON ud.unit_id = u.id
            AND ud.unassigned_at IS NULL
+        -- siscom-admin-api 036 renombró users.organization_id (v1.49.0, 02/10/2026).
         INNER JOIN users usr
-            ON usr.organization_id = u.organization_id
+            ON usr.default_organization_id = u.organization_id
            AND usr.is_master IS TRUE
         WHERE u.deleted_at IS NULL
 
