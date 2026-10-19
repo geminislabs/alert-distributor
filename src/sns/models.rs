@@ -138,11 +138,22 @@ impl SnsMessage {
 
 #[derive(Debug, Clone)]
 pub enum SnsError {
+    /// El endpoint ya no sirve (deshabilitado o borrado): se desactiva.
     InvalidEndpoint(String),
     Throttled,
     AuthError(String),
+    /// La aplicación de plataforma (credencial de FCM/APNs) está deshabilitada.
+    /// No es culpa del dispositivo: desactivarlo apagaría a todos.
+    PlatformDisabled(String),
     NetworkError(String),
     Unknown(String),
+}
+
+impl SnsError {
+    /// Solo lo transitorio merece otro intento.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, SnsError::Throttled | SnsError::NetworkError(_))
+    }
 }
 
 impl std::fmt::Display for SnsError {
@@ -151,6 +162,7 @@ impl std::fmt::Display for SnsError {
             SnsError::InvalidEndpoint(msg) => write!(f, "InvalidEndpoint: {}", msg),
             SnsError::Throttled => write!(f, "Throttled"),
             SnsError::AuthError(msg) => write!(f, "AuthError: {}", msg),
+            SnsError::PlatformDisabled(msg) => write!(f, "PlatformDisabled: {}", msg),
             SnsError::NetworkError(msg) => write!(f, "NetworkError: {}", msg),
             SnsError::Unknown(msg) => write!(f, "Unknown: {}", msg),
         }

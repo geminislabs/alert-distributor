@@ -1,180 +1,118 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+//! La foto de arranque: una lectura de las vistas `control_plane.*`.
+//!
+//! Son las vistas que siscom-admin-api mantiene como contrato (ADR-008 §4b),
+//! no sus tablas. La consulta anterior leía `users.organization_id`; la `036`
+//! la renombró y el siguiente arranque habría fallado. Ahora un cambio así
+//! rompe la CI de admin-api, no este arranque.
 
 use sqlx::FromRow;
+use uuid::Uuid;
 
 use crate::db::postgres::DbPool;
 use crate::errors::AppResult;
 use crate::sns::models::UserDevice;
 
-use super::cache::{DeviceId, OrganizationId, PermissionCache, UnitId, UserDevicesCache, UserId};
+use super::cache::ControlPlaneCache;
 
-type PermissionKey = (OrganizationId, UserId);
-
-#[derive(Debug, Clone, FromRow)]
-struct PermissionRow {
-    organization_id: OrganizationId,
-    user_id: UserId,
-    unit_id: UnitId,
+#[derive(FromRow)]
+struct UserRow {
+    id: Uuid,
+    status: String,
 }
 
-#[derive(Debug, Clone, FromRow)]
-struct DeviceRow {
-    organization_id: OrganizationId,
-    user_id: UserId,
-    device_id: DeviceId,
+#[derive(FromRow)]
+struct MembershipRow {
+    organization_id: Uuid,
+    user_id: Uuid,
+    role: String,
+    status: String,
+}
+
+#[derive(FromRow)]
+struct UserUnitRow {
+    organization_id: Uuid,
+    user_id: Uuid,
+    unit_id: Uuid,
+}
+
+#[derive(FromRow)]
+struct UnitDeviceRow {
+    device_id: String,
+    unit_id: Uuid,
+    organization_id: Uuid,
+}
+
+#[derive(FromRow)]
+struct UserDeviceRow {
+    id: Uuid,
+    user_id: Uuid,
     device_token: String,
     platform: String,
     endpoint_arn: Option<String>,
     is_active: bool,
 }
 
-pub async fn load_permission_snapshot(pool: &DbPool) -> AppResult<PermissionCache> {
-    let rows = sqlx::query_as::<_, PermissionRow>(
-        r#"
-        SELECT u.organization_id, usr.id AS user_id, u.id AS unit_id
-        FROM units u
-        INNER JOIN unit_devices ud
-            ON ud.unit_id = u.id
-           AND ud.unassigned_at IS NULL
-        -- siscom-admin-api 036 renombró users.organization_id (v1.49.0, 02/10/2026).
-        INNER JOIN users usr
-            ON usr.default_organization_id = u.organization_id
-           AND usr.is_master IS TRUE
-        WHERE u.deleted_at IS NULL
+pub async fn load_control_plane_snapshot(pool: &DbPool) -> AppResult<ControlPlaneCache> {
+    let cache = ControlPlaneCache::default();
 
-        UNION
+    for row in sqlx::query_as::<_, UserRow>("SELECT id, status FROM control_plane.users")
+        .fetch_all(pool)
+        .await?
+    {
+        cache.apply_user(row.id, &row.status).await;
+    }
 
-        SELECT u.organization_id, uu.user_id, u.id AS unit_id
-        FROM user_units uu
-        INNER JOIN units u
-            ON u.id = uu.unit_id
-           AND u.deleted_at IS NULL
-        INNER JOIN unit_devices ud
-            ON ud.unit_id = u.id
-           AND ud.unassigned_at IS NULL
-        INNER JOIN users usr
-            ON usr.id = uu.user_id
-           AND COALESCE(usr.is_master, FALSE) IS FALSE
-        "#,
+    for row in sqlx::query_as::<_, MembershipRow>(
+        "SELECT organization_id, user_id, role, status FROM control_plane.organization_users",
     )
     .fetch_all(pool)
-    .await?;
+    .await?
+    {
+        cache
+            .upsert_membership(row.organization_id, row.user_id, &row.role, &row.status)
+            .await;
+    }
 
-    Ok(cache_from_rows(rows))
-}
-
-pub async fn load_user_devices_snapshot(pool: &DbPool) -> AppResult<UserDevicesCache> {
-    let rows = sqlx::query_as::<_, DeviceRow>(
-        r#"
-        SELECT
-            ou.organization_id,
-            ud.user_id,
-            ud.id AS device_id,
-            ud.device_token,
-            ud.platform,
-            ud.endpoint_arn,
-            ud.is_active
-        FROM user_devices ud
-        INNER JOIN organization_users ou
-            ON ud.user_id = ou.user_id
-        WHERE ud.is_active = TRUE
-        "#,
+    for row in sqlx::query_as::<_, UserUnitRow>(
+        "SELECT organization_id, user_id, unit_id FROM control_plane.user_units",
     )
     .fetch_all(pool)
-    .await?;
-
-    Ok(device_cache_from_rows(rows))
-}
-
-fn cache_from_rows(rows: Vec<PermissionRow>) -> PermissionCache {
-    let mut grouped: HashMap<PermissionKey, HashSet<UnitId>> = HashMap::new();
-    let mut by_unit_grouped: HashMap<UnitId, HashSet<PermissionKey>> = HashMap::new();
-
-    for row in rows {
-        grouped
-            .entry((row.organization_id, row.user_id))
-            .or_default()
-            .insert(row.unit_id);
-
-        by_unit_grouped
-            .entry(row.unit_id)
-            .or_default()
-            .insert((row.organization_id, row.user_id));
+    .await?
+    {
+        cache
+            .upsert_user_unit(row.organization_id, row.user_id, row.unit_id)
+            .await;
     }
 
-    let mut cache = HashMap::with_capacity(grouped.len());
-    for (key, units) in grouped {
-        let mut unit_ids = units.into_iter().collect::<Vec<UnitId>>();
-        unit_ids.sort_unstable();
-        cache.insert(key, Arc::new(unit_ids));
+    for row in sqlx::query_as::<_, UnitDeviceRow>(
+        "SELECT device_id, unit_id, organization_id FROM control_plane.unit_devices",
+    )
+    .fetch_all(pool)
+    .await?
+    {
+        cache
+            .upsert_unit_device(&row.device_id, row.unit_id, row.organization_id)
+            .await;
     }
 
-    let mut by_unit = HashMap::with_capacity(by_unit_grouped.len());
-    for (unit_id, users) in by_unit_grouped {
-        let mut allowed_users = users.into_iter().collect::<Vec<PermissionKey>>();
-        allowed_users.sort_unstable();
-        by_unit.insert(unit_id, Arc::new(allowed_users));
+    for row in sqlx::query_as::<_, UserDeviceRow>(
+        "SELECT id, user_id, device_token, platform, endpoint_arn, is_active \
+         FROM control_plane.user_devices WHERE is_active",
+    )
+    .fetch_all(pool)
+    .await?
+    {
+        cache
+            .upsert_user_device(UserDevice {
+                id: row.id,
+                user_id: row.user_id,
+                device_token: row.device_token,
+                platform: row.platform,
+                endpoint_arn: row.endpoint_arn.unwrap_or_default(),
+                is_active: row.is_active,
+            })
+            .await;
     }
 
-    PermissionCache::new(cache, by_unit)
-}
-
-fn device_cache_from_rows(rows: Vec<DeviceRow>) -> UserDevicesCache {
-    let mut grouped: HashMap<PermissionKey, Vec<UserDevice>> = HashMap::new();
-
-    for row in rows {
-        let device = UserDevice {
-            id: row.device_id,
-            user_id: row.user_id,
-            device_token: row.device_token,
-            platform: row.platform,
-            endpoint_arn: row.endpoint_arn.unwrap_or_default(),
-            is_active: row.is_active,
-        };
-
-        grouped
-            .entry((row.organization_id, row.user_id))
-            .or_default()
-            .push(device);
-    }
-
-    let mut cache = HashMap::with_capacity(grouped.len());
-    for (key, devices) in grouped {
-        cache.insert(key, Arc::new(devices));
-    }
-
-    UserDevicesCache::new(cache)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn snapshot_builder_deduplicates_units() {
-        let org = OrganizationId::new_v4();
-        let user = UserId::new_v4();
-        let unit = UnitId::new_v4();
-
-        let rows = vec![
-            PermissionRow {
-                organization_id: org,
-                user_id: user,
-                unit_id: unit,
-            },
-            PermissionRow {
-                organization_id: org,
-                user_id: user,
-                unit_id: unit,
-            },
-        ];
-
-        let cache = cache_from_rows(rows);
-        let units =
-            futures::executor::block_on(cache.units_for(org, user)).expect("units should exist");
-
-        assert_eq!(units.len(), 1);
-        assert_eq!(units[0], unit);
-    }
+    Ok(cache)
 }

@@ -13,8 +13,10 @@ use db::postgres::connect_pool;
 use errors::AppResult;
 use futures::stream::{FuturesUnordered, StreamExt};
 use kafka::consumer::AlertsConsumer;
-use kafka::updates::{run_permission_reload_consumer, run_user_devices_updates_consumer};
-use permissions::loader::{load_permission_snapshot, load_user_devices_snapshot};
+use kafka::control_plane::{
+    ControlPlaneHealth, prepare_control_plane_consumer, run_control_plane_consumer,
+};
+use permissions::loader::load_control_plane_snapshot;
 use sns::{SnsBroadcaster, SnsClient, SnsDispatcher, SnsMetrics, run_metrics_reporter};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,8 +33,11 @@ async fn main() -> AppResult<()> {
 
     let config = AppConfig::from_env()?;
     let db_pool = connect_pool(&config).await?;
-    let permission_cache = Arc::new(load_permission_snapshot(&db_pool).await?);
-    let user_devices_cache = Arc::new(load_user_devices_snapshot(&db_pool).await?);
+    // Los offsets de partida se anotan antes de la foto (ADR-008 §4 de
+    // siscom-admin-api). Si el topic no se puede leer, no se arranca (§9).
+    let control_plane_start = prepare_control_plane_consumer(&config)?;
+    let control_plane = Arc::new(load_control_plane_snapshot(&db_pool).await?);
+    let control_plane_health = Arc::new(ControlPlaneHealth::default());
 
     let sns_metrics = Arc::new(SnsMetrics::default());
 
@@ -57,7 +62,7 @@ async fn main() -> AppResult<()> {
         && let Some(sns_client) = _sns_client.clone()
     {
         let db_pool_worker = db_pool.clone();
-        let user_devices_cache_worker = user_devices_cache.clone();
+        let user_devices_cache_worker = control_plane.clone();
         let broadcaster_rx = sns_broadcaster.subscribe();
         let sns_batch_timeout = Duration::from_millis(config.sns_batch_timeout_ms);
         let sns_metrics_worker = sns_metrics.clone();
@@ -77,8 +82,7 @@ async fn main() -> AppResult<()> {
     let registry = Arc::new(ConnectionRegistry::new());
     let dispatcher = Arc::new(AlertDispatcher::new(registry.clone()));
     let sns_dispatcher = Arc::new(SnsDispatcher::new(
-        permission_cache.clone(),
-        user_devices_cache.clone(),
+        control_plane.clone(),
         sns_broadcaster.clone(),
         sns_metrics.clone(),
     ));
@@ -86,7 +90,8 @@ async fn main() -> AppResult<()> {
     let ws_state = Arc::new(WsServerState::new(
         registry,
         jwt_validator,
-        permission_cache.clone(),
+        control_plane.clone(),
+        control_plane_health.clone(),
         config.ws_channel_capacity,
         Duration::from_secs(config.ws_heartbeat_interval_secs),
         Duration::from_secs(config.ws_heartbeat_timeout_secs),
@@ -94,77 +99,35 @@ async fn main() -> AppResult<()> {
 
     let consumer = AlertsConsumer::new(&config, dispatcher.clone(), sns_dispatcher.clone())?;
 
-    let permission_snapshot_entries = permission_cache.len().await;
-    let user_devices_snapshot_entries = user_devices_cache.len().await;
+    let counts = control_plane.counts().await;
     info!(
         brokers = %config.kafka_brokers,
         topic = %config.kafka_topic,
         group_id = %config.kafka_group_id,
         rust_log = %config.rust_log,
         ws_bind_addr = %config.ws_bind_addr,
-        permission_snapshot_entries,
-        user_devices_snapshot_entries,
+        control_plane_topic = %config.kafka_control_plane_topic,
+        users = counts.users,
+        memberships = counts.memberships,
+        user_units = counts.user_units,
+        unit_devices = counts.unit_devices,
+        user_devices = counts.user_devices,
         "alert_distributor_started"
     );
 
-    {
-        let config = config.clone();
-        let db_pool = db_pool.clone();
-        let permission_cache = permission_cache.clone();
-        tokio::spawn(async move {
-            if let Err(err) = run_permission_reload_consumer(
-                config.clone(),
-                config.kafka_unit_devices_updates_topic.clone(),
-                config.kafka_unit_devices_updates_group_id.clone(),
-                "alert-distributor-unit-devices-updates",
-                db_pool,
-                permission_cache,
-            )
-            .await
-            {
-                error!(error = %err, "unit_devices_updates_consumer_stopped");
-            }
-        });
-    }
-
-    {
-        let config = config.clone();
-        let db_pool = db_pool.clone();
-        let permission_cache = permission_cache.clone();
-        tokio::spawn(async move {
-            if let Err(err) = run_permission_reload_consumer(
-                config.clone(),
-                config.kafka_user_units_updates_topic.clone(),
-                config.kafka_user_units_updates_group_id.clone(),
-                "alert-distributor-user-units-updates",
-                db_pool,
-                permission_cache,
-            )
-            .await
-            {
-                error!(error = %err, "user_units_updates_consumer_stopped");
-            }
-        });
-    }
-
-    {
-        let config = config.clone();
-        let user_devices_cache = user_devices_cache.clone();
-        tokio::spawn(async move {
-            if let Err(err) = run_user_devices_updates_consumer(
-                config.clone(),
-                config.kafka_user_devices_updates_topic.clone(),
-                config.kafka_user_devices_updates_group_id.clone(),
-                user_devices_cache,
-            )
-            .await
-            {
-                error!(error = %err, "user_devices_updates_consumer_stopped");
-            }
-        });
-    }
+    let control_plane_task = run_control_plane_consumer(
+        control_plane_start,
+        control_plane.clone(),
+        control_plane_health.clone(),
+    );
 
     tokio::select! {
+        result = control_plane_task => {
+            // No debería terminar nunca: si termina, los destinatarios dejarían
+            // de cambiar. Mejor caer y que el despliegue lo muestre.
+            error!(result = ?result, "control_plane_consumer_stopped");
+            return result;
+        }
         result = consumer.run(&config.kafka_topic) => {
             if let Err(err) = result {
                 error!(error = %err, "consumer_stopped_with_error");
@@ -193,7 +156,7 @@ async fn sns_worker_task(
     mut rx: tokio::sync::broadcast::Receiver<(sns::UserDevice, models::alert_event::AlertEvent)>,
     sns_client: SnsClient,
     db_pool: db::postgres::DbPool,
-    user_devices_cache: Arc<permissions::cache::UserDevicesCache>,
+    user_devices_cache: Arc<permissions::cache::ControlPlaneCache>,
     batch_timeout: Duration,
     metrics: Arc<SnsMetrics>,
 ) {
@@ -270,7 +233,7 @@ async fn process_sns_delivery(
     event: models::alert_event::AlertEvent,
     sns_client: SnsClient,
     db_pool: db::postgres::DbPool,
-    user_devices_cache: Arc<permissions::cache::UserDevicesCache>,
+    user_devices_cache: Arc<permissions::cache::ControlPlaneCache>,
     metrics: Arc<SnsMetrics>,
 ) {
     use tracing::warn;

@@ -13,12 +13,14 @@ use uuid::Uuid;
 
 use super::auth::{AuthContext, JwtValidator};
 use super::registry::ConnectionRegistry;
-use crate::permissions::cache::PermissionCache;
+use crate::kafka::control_plane::ControlPlaneHealth;
+use crate::permissions::cache::ControlPlaneCache;
 
 pub struct WsServerState {
     pub registry: Arc<ConnectionRegistry>,
     pub jwt_validator: Arc<JwtValidator>,
-    pub permission_cache: Arc<PermissionCache>,
+    pub permission_cache: Arc<ControlPlaneCache>,
+    pub control_plane_health: Arc<ControlPlaneHealth>,
     pub channel_capacity: usize,
     pub heartbeat_interval: Duration,
     pub heartbeat_timeout: Duration,
@@ -28,7 +30,8 @@ impl WsServerState {
     pub fn new(
         registry: Arc<ConnectionRegistry>,
         jwt_validator: Arc<JwtValidator>,
-        permission_cache: Arc<PermissionCache>,
+        permission_cache: Arc<ControlPlaneCache>,
+        control_plane_health: Arc<ControlPlaneHealth>,
         channel_capacity: usize,
         heartbeat_interval: Duration,
         heartbeat_timeout: Duration,
@@ -37,6 +40,7 @@ impl WsServerState {
             registry,
             jwt_validator,
             permission_cache,
+            control_plane_health,
             channel_capacity,
             heartbeat_interval,
             heartbeat_timeout,
@@ -63,19 +67,19 @@ pub async fn ws_handler(
             StatusCode::UNAUTHORIZED
         })?;
 
-    let Some(unit_ids) = state
+    let unit_ids = state
         .permission_cache
         .units_for(auth_context.organization_id, auth_context.user_id)
-        .await
-        .filter(|unit_ids| !unit_ids.is_empty())
-    else {
+        .await;
+    if unit_ids.is_empty() {
         warn!(
             user_id = %auth_context.user_id,
             organization_id = %auth_context.organization_id,
             "websocket_authz_failed_no_units"
         );
         return Err(StatusCode::FORBIDDEN);
-    };
+    }
+    let unit_ids = Arc::new(unit_ids);
 
     info!(
         user_id = %auth_context.user_id,
@@ -182,4 +186,35 @@ async fn handle_socket(
         active_connections = connections,
         "websocket_connection_closed"
     );
+}
+
+/// 503 si el consumidor de `control-plane-events` no puede leer (ADR-008 §9 de
+/// siscom-admin-api). Con él caído, los destinatarios dejarían de cambiar sin
+/// que nada avisara.
+pub async fn health_handler(
+    State(state): State<Arc<WsServerState>>,
+) -> (StatusCode, axum::Json<serde_json::Value>) {
+    let health = &state.control_plane_health;
+    let ok = health.is_ok();
+    let counts = state.permission_cache.counts().await;
+    let status = if ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        axum::Json(serde_json::json!({
+            "control_plane": {
+                "ok": ok,
+                "applied_offset": health.applied_offset(),
+                "lag": health.lag(),
+                "users": counts.users,
+                "memberships": counts.memberships,
+                "user_units": counts.user_units,
+                "unit_devices": counts.unit_devices,
+                "user_devices": counts.user_devices,
+            }
+        })),
+    )
 }

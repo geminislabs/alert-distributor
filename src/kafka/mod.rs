@@ -1,2 +1,2 @@
 pub mod consumer;
-pub mod updates;
+pub mod control_plane;
